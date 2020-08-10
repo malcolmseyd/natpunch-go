@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
@@ -23,13 +24,35 @@ import (
 const timeout = time.Second * 10
 const persistentKeepalive = "25"
 
+const udpProtocol = 17
+
 // 28 = ip header + udp header
 const emptyUDPsize = 28
+
+// Pubkey stores a 32 byte representation of a Wireguard public key
+type Pubkey [32]byte
+
+// Server stores data relating to the server and its location
+type Server struct {
+	hostname string
+	addr     *net.IPAddr
+	port     uint16
+}
+
+// Peer stores data about a peer's key and endpoint, whether it's another peer or the client
+// we use resolved to check if a peer's ip and port have been filled in.
+// this seems clearer than checking if port == 0
+type Peer struct {
+	resolved bool
+	ip       net.IP
+	port     uint16
+	pubkey   Pubkey
+}
 
 func main() {
 	if len(os.Args) < 3 {
 		fmt.Fprintln(os.Stderr,
-			"Usage:", os.Args[0], "SERVER:PORT WIREGUARD_INTERFACE\n"+
+			"Usage:", os.Args[0], "SERVER_HOSTNAME:PORT WIREGUARD_INTERFACE\n"+
 				"Example:\n"+
 				"   ", os.Args[0], "demo.wireguard.com:12345 wg0")
 		os.Exit(1)
@@ -41,48 +64,74 @@ func main() {
 	}
 
 	serverSplit := strings.Split(os.Args[1], ":")
-	serverHostnameStr := serverSplit[0]
+	serverHostname := serverSplit[0]
 	if len(serverSplit) < 2 {
-		fmt.Fprintln(os.Stderr, "Please include a port like this:", serverHostnameStr+":PORT")
+		fmt.Fprintln(os.Stderr, "Please include a port like this:", serverHostname+":PORT")
 		os.Exit(1)
 	}
-	serverPort, err := strconv.Atoi(serverSplit[1])
+
+	serverAddr := hostToAddr(serverHostname)
+
+	serverPort, err := strconv.ParseUint(serverSplit[1], 10, 16)
 	if err != nil {
 		log.Fatalln("Error parsing server port:", err)
 	}
-	iface := os.Args[2]
+	server := Server{
+		hostname: serverHostname,
+		addr:     serverAddr,
+		port:     uint16(serverPort),
+	}
+	ifaceName := os.Args[2]
 
-	serverAddr := hostToAddr(serverHostnameStr)
-	clientIP := getClientIP(serverAddr.IP)
+	run(ifaceName, server)
+}
 
-	clientPort := getClientPort(iface)
-	clientPubkey := getClientPubkey(iface)
+func run(ifaceName string, server Server) {
+	// get the source ip that we'll send the packet from
+	clientIP := getClientIP(server.addr.IP)
 
-	runCmd("wg-quick", "up", iface)
-	peerKeysStr := getPeers(iface)
-	pubkeyMap := makeKeyMap(peerKeysStr)
+	runCmd("wg-quick", "up", ifaceName)
 
-	rawConn := setupRawConn(serverAddr, serverPort, clientIP, clientPort)
+	// get info about the Wireguard config
+	clientPort := getClientPort(ifaceName)
+	clientPubkey := getClientPubkey(ifaceName)
 
+	client := Peer{
+		ip:     clientIP,
+		port:   clientPort,
+		pubkey: clientPubkey,
+	}
+
+	peerKeysStr := getPeers(ifaceName)
+	var peers []Peer = makePeerSlice(peerKeysStr)
+
+	// we're using raw sockets to spoof the source IP
+	rawConn := setupRawConn(&server, &client)
+
+	// payload consists of client key + peer key
 	payload := make([]byte, 64)
 	copy(payload[0:32], clientPubkey[:])
 
 	response := make([]byte, 4096)
 
+	fmt.Println("Resolving", len(peers), "peers")
+
+	// we keep requesting if the server doesn't have one of our peers.
+	// this could run in the background until all connections are established.
 	keepRequesting := true
 	for keepRequesting {
 		keepRequesting = false
-		for peerPubkey, resolved := range pubkeyMap {
-			if resolved {
+		for i, peer := range peers {
+			if peer.resolved {
 				continue
 			}
-			fmt.Print("[+] Requesting peer " + base64.RawStdEncoding.EncodeToString(peerPubkey[:]) + ": ")
-			copy(payload[32:64], peerPubkey[:])
+			fmt.Print("[+] Requesting peer " + base64.RawStdEncoding.EncodeToString(peer.pubkey[:]) + ": ")
+			copy(payload[32:64], peer.pubkey[:])
 
-			packet := makePacket(payload, serverAddr.IP, serverPort, clientIP, clientPort)
-			_, err := rawConn.WriteToIP(packet, serverAddr)
+			packet := makePacket(payload, &server, &client)
+			_, err := rawConn.WriteToIP(packet, server.addr)
 			if err != nil {
-				log.Println("Error sending packet:", err)
+				log.Println("\nError sending packet:", err)
 				continue
 			}
 
@@ -90,7 +139,7 @@ func main() {
 			n, err := rawConn.Read(response)
 			if err != nil {
 				if err, ok := err.(net.Error); ok && err.Timeout() {
-					fmt.Println("\nConnection to", serverHostnameStr, "timed out.")
+					fmt.Println("\nConnection to", server.hostname, "timed out.")
 					continue
 				}
 				fmt.Println("\nError receiving packet:", err)
@@ -98,22 +147,30 @@ func main() {
 			}
 
 			if n == emptyUDPsize {
-				fmt.Println("Server doesn't have it yet")
+				fmt.Println("not found")
 				keepRequesting = true
 				continue
 			} else if n < emptyUDPsize {
-				log.Println("\nError: not a valid udp packet")
+				log.Println("\nError: response is not a valid udp packet")
+				continue
+			} else if n != emptyUDPsize+4+2 {
+				// expected packet size, 4 bytes for ip, 2 for port
+				log.Println("\nError: invalid response")
+				fmt.Println(hex.Dump(response[:n]))
+				keepRequesting = true
 				continue
 			}
 
-			// fmt.Println(n, "bytes read")
+			peer.ip, peer.port = parseResponse(response)
+			if peer.ip == nil {
+				log.Println("Error: packet was not UDP")
+			}
+			peer.resolved = true
 
-			ip, port := parseResponse(response)
+			fmt.Println(peer.ip.String() + ":" + strconv.FormatUint(uint64(peer.port), 10))
+			setPeer(&peer, ifaceName)
 
-			fmt.Println(ip.String() + ":" + strconv.Itoa(port))
-			setPeer(peerPubkey, ip, port, iface)
-
-			pubkeyMap[peerPubkey] = true
+			peers[i] = peer
 		}
 		if keepRequesting {
 			time.Sleep(time.Second * 2)
@@ -147,8 +204,8 @@ func hostToAddr(hostStr string) *net.IPAddr {
 	return nil
 }
 
-func setupRawConn(serverAddr *net.IPAddr, serverPort int, clientIP net.IP, clientPort int) *ipv4.RawConn {
-	packetConn, err := net.ListenPacket("ip4:udp", clientIP.String())
+func setupRawConn(server *Server, client *Peer) *ipv4.RawConn {
+	packetConn, err := net.ListenPacket("ip4:udp", client.ip.String())
 	if err != nil {
 		log.Fatalln("Error creating packetConn", err)
 	}
@@ -158,26 +215,28 @@ func setupRawConn(serverAddr *net.IPAddr, serverPort int, clientIP net.IP, clien
 		log.Fatalln("Error creating rawConn", err)
 	}
 
-	applyBPF(rawConn, serverAddr.IP, uint32(serverPort), uint32(clientPort))
+	applyBPF(rawConn, server, client)
 
 	return rawConn
 }
 
-func applyBPF(rawConn *ipv4.RawConn, serverIP net.IP, serverPort, clientPort uint32) {
-	ipArr := []byte(serverIP.To4())
+func applyBPF(rawConn *ipv4.RawConn, server *Server, client *Peer) {
+	ipArr := []byte(server.addr.IP.To4())
 	ipInt := uint32(ipArr[0])<<(3*8) + uint32(ipArr[1])<<(2*8) + uint32(ipArr[2])<<8 + uint32(ipArr[3])
 
 	// fmt.Println("IP as an int:", ipInt)
 
 	bpfRaw, err := bpf.Assemble([]bpf.Instruction{
 		bpf.LoadAbsolute{Off: 12, Size: 4}, //src ip
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: ipInt, SkipFalse: 0, SkipTrue: 5},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: ipInt, SkipFalse: 0, SkipTrue: 7},
+		bpf.LoadAbsolute{Off: 9, Size: 1}, //ipv4 protocol (udp)
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: udpProtocol, SkipFalse: 0, SkipTrue: 5},
 		bpf.LoadAbsolute{Off: 20, Size: 2}, //src port
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: serverPort, SkipFalse: 0, SkipTrue: 3},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(server.port), SkipFalse: 0, SkipTrue: 3},
 		bpf.LoadAbsolute{Off: 22, Size: 2}, //dst port
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: clientPort, SkipFalse: 0, SkipTrue: 1},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(client.port), SkipFalse: 0, SkipTrue: 1},
 		bpf.RetConstant{Val: 0},
-		bpf.RetConstant{Val: 1<<(8*4) - 1}, // max uint32 size (entire packet)
+		bpf.RetConstant{Val: 1<<(8*4) - 1}, // max number that fits this value (entire packet)
 	})
 
 	err = rawConn.SetBPF(bpfRaw)
@@ -186,7 +245,7 @@ func applyBPF(rawConn *ipv4.RawConn, serverIP net.IP, serverPort, clientPort uin
 	}
 }
 
-func makePacket(payload []byte, serverIP net.IP, serverPort int, clientIP net.IP, clientPort int) []byte {
+func makePacket(payload []byte, server *Server, client *Peer) []byte {
 	buf := gopacket.NewSerializeBuffer()
 
 	// this does the hard stuff for us
@@ -196,16 +255,16 @@ func makePacket(payload []byte, serverIP net.IP, serverPort int, clientIP net.IP
 	}
 
 	ipHeader := layers.IPv4{
-		SrcIP:    clientIP,
-		DstIP:    serverIP,
+		SrcIP:    client.ip,
+		DstIP:    server.addr.IP,
 		Version:  4,
 		TTL:      64,
 		Protocol: layers.IPProtocolUDP,
 	}
 
 	udpHeader := layers.UDP{
-		SrcPort: layers.UDPPort(clientPort),
-		DstPort: layers.UDPPort(serverPort),
+		SrcPort: layers.UDPPort(client.port),
+		DstPort: layers.UDPPort(server.port),
 	}
 
 	payloadLayer := gopacket.Payload(payload)
@@ -225,16 +284,17 @@ func runCmd(command string, args ...string) (string, error) {
 	return string(outBytes), nil
 }
 
-func getClientPort(iface string) int {
+func getClientPort(iface string) uint16 {
 	output, err := runCmd("wg", "show", iface, "listen-port")
 	if err != nil {
 		log.Fatalln("Error getting listen port:", err)
 	}
-	port, err := strconv.Atoi(strings.TrimSpace(output))
+	// guaranteed castable to uint16
+	port, err := strconv.ParseUint(strings.TrimSpace(output), 10, 16)
 	if err != nil {
 		log.Fatalln("Error parsing listen port:", err)
 	}
-	return port
+	return uint16(port)
 }
 
 func getPeers(iface string) []string {
@@ -245,7 +305,7 @@ func getPeers(iface string) []string {
 	return strings.Split(strings.TrimSpace(output), "\n")
 }
 
-func getClientPubkey(iface string) [32]byte {
+func getClientPubkey(iface string) Pubkey {
 	var keyArr [32]byte
 	output, err := runCmd("wg", "show", iface, "public-key")
 	if err != nil {
@@ -256,25 +316,30 @@ func getClientPubkey(iface string) [32]byte {
 		log.Fatalln("Error parsing client pubkey")
 	}
 	copy(keyArr[:], keyBytes)
-	return keyArr
+	return Pubkey(keyArr)
 }
 
-func makeKeyMap(peerKeys []string) map[[32]byte]bool {
-	keyMap := make(map[[32]byte]bool)
-	for _, key := range peerKeys {
+func makePeerSlice(peerKeys []string) []Peer {
+	keys := make([]Peer, len(peerKeys))
+	for i, key := range peerKeys {
 		keyBytes, err := base64.StdEncoding.DecodeString(key)
 		if err != nil {
 			log.Fatalln("Error decoding key "+key+":", err)
 		}
 		keyArr := [32]byte{}
 		copy(keyArr[:], keyBytes)
-
-		keyMap[keyArr] = false
+		// all other fields initialize to zero values
+		peer := Peer{
+			pubkey:   Pubkey(keyArr),
+			resolved: false,
+		}
+		keys[i] = peer
 	}
-	return keyMap
+	return keys
 }
 
-func parseResponse(response []byte) (net.IP, int) {
+// there's no error checking, we assume that data passed in is valid
+func parseResponse(response []byte) (net.IP, uint16) {
 	var ip net.IP
 	var ipv4Slice []byte = make([]byte, 4)
 	var port uint16
@@ -282,6 +347,9 @@ func parseResponse(response []byte) (net.IP, int) {
 		Lazy:   true,
 		NoCopy: true,
 	})
+	if packet.TransportLayer().LayerType() != layers.LayerTypeUDP {
+		return nil, 0
+	}
 	payload := packet.ApplicationLayer().LayerContents()
 
 	data := bytes.NewBuffer(payload)
@@ -291,15 +359,15 @@ func parseResponse(response []byte) (net.IP, int) {
 	ip = net.IP(ipv4Slice)
 	binary.Read(data, binary.BigEndian, &port)
 	// fmt.Println("ip:", ip.String(), "port:", port)
-	return ip, int(port)
+	return ip, port
 }
 
-func setPeer(pubkey [32]byte, ip net.IP, port int, iface string) {
-	keyString := base64.StdEncoding.EncodeToString(pubkey[:])
+func setPeer(peer *Peer, iface string) {
+	keyString := base64.StdEncoding.EncodeToString(peer.pubkey[:])
 	runCmd("wg",
 		"set", iface,
 		"peer", keyString,
 		"persistent-keepalive", persistentKeepalive,
-		"endpoint", ip.String()+":"+strconv.Itoa(port),
+		"endpoint", peer.ip.String()+":"+strconv.FormatUint(uint64(peer.port), 10),
 	)
 }
