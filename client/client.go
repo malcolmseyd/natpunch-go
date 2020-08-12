@@ -118,6 +118,7 @@ func run(ifaceName string, server Server) {
 
 	// we keep requesting if the server doesn't have one of our peers.
 	// this could run in the background until all connections are established.
+
 	keepRequesting := true
 	for keepRequesting {
 		keepRequesting = false
@@ -155,7 +156,8 @@ func run(ifaceName string, server Server) {
 				continue
 			} else if n != emptyUDPsize+4+2 {
 				// expected packet size, 4 bytes for ip, 2 for port
-				log.Println("\nError: invalid response")
+				log.Println("\nError: invalid response of length", n)
+				// For debugging
 				fmt.Println(hex.Dump(response[:n]))
 				keepRequesting = true
 				continue
@@ -178,6 +180,66 @@ func run(ifaceName string, server Server) {
 	}
 	fmt.Println("Closing socket...")
 	rawConn.Close()
+}
+
+func testBPF(peers []Peer, client *Peer, server *Server, rawConn *ipv4.RawConn) {
+	payload := make([]byte, 64)
+	copy(payload[0:32], client.pubkey[:])
+
+	response := make([]byte, 4096)
+
+	// goroutine to read replies
+	go func() {
+		for {
+			n, err := rawConn.Read(response)
+			if err != nil {
+				if err, ok := err.(net.Error); ok && err.Timeout() {
+					fmt.Println("\nConnection to", server.hostname, "timed out.")
+					continue
+				}
+				fmt.Println("\nError receiving packet:", err)
+				continue
+			}
+			// fmt.Println(n-28, "bytes read")
+			if n != 28 && n != 28+6 {
+				srcIP, srcPort, dstPort := parseForBPF(response)
+				fmt.Println("\nInvalid response of", n, "bytes")
+				fmt.Println("SRC IP:", srcIP, "\tEXPECTED:", server.addr.IP)
+				fmt.Println("SRC PORT:", srcPort, "\tEXPECTED:", server.port)
+				fmt.Println("DST PORT:", dstPort, "\tEXPECTED:", client.port)
+				fmt.Println()
+				// fmt.Println(hex.Dump(response[:n]))
+			} else {
+				fmt.Print(".")
+			}
+		}
+	}()
+
+	// send packets on the main goroutine
+	for {
+		for _, peer := range peers {
+			copy(payload[32:64], peer.pubkey[:])
+
+			packet := makePacket(payload, server, client)
+			_, err := rawConn.WriteToIP(packet, server.addr)
+			if err != nil {
+				log.Println("\nError sending packet:", err)
+				continue
+			}
+		}
+	}
+}
+
+func parseForBPF(response []byte) (srcIP net.IP, srcPort uint16, dstPort uint16) {
+	srcIP = make([]byte, 4)
+	srcIPBytes := bytes.NewBuffer(response[12:16])
+	srcPortBytes := bytes.NewBuffer(response[20:22])
+	dstPortBytes := bytes.NewBuffer(response[22:24])
+
+	binary.Read(srcIPBytes, binary.BigEndian, &srcIP)
+	binary.Read(srcPortBytes, binary.BigEndian, &srcPort)
+	binary.Read(dstPortBytes, binary.BigEndian, &dstPort)
+	return
 }
 
 func getClientIP(dstIP net.IP) net.IP {
@@ -221,22 +283,32 @@ func setupRawConn(server *Server, client *Peer) *ipv4.RawConn {
 }
 
 func applyBPF(rawConn *ipv4.RawConn, server *Server, client *Peer) {
+	const ipv4HeaderLen = 20
+
+	const srcIPOffset = 12
+	const srcPortOffset = ipv4HeaderLen + 0
+	const dstPortOffset = ipv4HeaderLen + 2
+
 	ipArr := []byte(server.addr.IP.To4())
 	ipInt := uint32(ipArr[0])<<(3*8) + uint32(ipArr[1])<<(2*8) + uint32(ipArr[2])<<8 + uint32(ipArr[3])
 
-	// fmt.Println("IP as an int:", ipInt)
+	fmt.Println("IP as an int:", ipInt)
 
+	// we don't need to filter packet type because the rawconn is ipv4-udp only
+	// Skip values represent the number of instructions to skip if true or false
+	// We can skip to the end if we get a !=, otherwise keep going
 	bpfRaw, err := bpf.Assemble([]bpf.Instruction{
-		bpf.LoadAbsolute{Off: 12, Size: 4}, //src ip
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: ipInt, SkipFalse: 0, SkipTrue: 7},
-		bpf.LoadAbsolute{Off: 9, Size: 1}, //ipv4 protocol (udp)
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: udpProtocol, SkipFalse: 0, SkipTrue: 5},
-		bpf.LoadAbsolute{Off: 20, Size: 2}, //src port
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(server.port), SkipFalse: 0, SkipTrue: 3},
-		bpf.LoadAbsolute{Off: 22, Size: 2}, //dst port
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(client.port), SkipFalse: 0, SkipTrue: 1},
-		bpf.RetConstant{Val: 0},
+		bpf.LoadAbsolute{Off: srcIPOffset, Size: 4}, //src ip is server
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: ipInt, SkipFalse: 5, SkipTrue: 0},
+
+		bpf.LoadAbsolute{Off: srcPortOffset, Size: 2}, //src port is server
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(server.port), SkipFalse: 3, SkipTrue: 0},
+
+		bpf.LoadAbsolute{Off: dstPortOffset, Size: 2}, //dst port is client
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(client.port), SkipFalse: 1, SkipTrue: 0},
+
 		bpf.RetConstant{Val: 1<<(8*4) - 1}, // max number that fits this value (entire packet)
+		bpf.RetConstant{Val: 0},
 	})
 
 	err = rawConn.SetBPF(bpfRaw)
