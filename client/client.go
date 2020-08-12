@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
@@ -113,10 +114,81 @@ func run(ifaceName string, server Server) {
 
 	response := make([]byte, 4096)
 
-	// fmt.Println("Resolving", len(peers), "peers")
+	fmt.Println("Resolving", len(peers), "peers")
 
 	// we keep requesting if the server doesn't have one of our peers.
 	// this could run in the background until all connections are established.
+
+	keepRequesting := true
+	for keepRequesting {
+		keepRequesting = false
+		for i, peer := range peers {
+			if peer.resolved {
+				continue
+			}
+			fmt.Print("[+] Requesting peer " + base64.RawStdEncoding.EncodeToString(peer.pubkey[:]) + ": ")
+			copy(payload[32:64], peer.pubkey[:])
+
+			packet := makePacket(payload, &server, &client)
+			_, err := rawConn.WriteToIP(packet, server.addr)
+			if err != nil {
+				log.Println("\nError sending packet:", err)
+				continue
+			}
+
+			rawConn.SetReadDeadline(time.Now().Add(timeout))
+			n, err := rawConn.Read(response)
+			if err != nil {
+				if err, ok := err.(net.Error); ok && err.Timeout() {
+					fmt.Println("\nConnection to", server.hostname, "timed out.")
+					continue
+				}
+				fmt.Println("\nError receiving packet:", err)
+				continue
+			}
+
+			if n == emptyUDPsize {
+				fmt.Println("not found")
+				keepRequesting = true
+				continue
+			} else if n < emptyUDPsize {
+				log.Println("\nError: response is not a valid udp packet")
+				continue
+			} else if n != emptyUDPsize+4+2 {
+				// expected packet size, 4 bytes for ip, 2 for port
+				log.Println("\nError: invalid response of length", n)
+				// For debugging
+				fmt.Println(hex.Dump(response[:n]))
+				keepRequesting = true
+				continue
+			}
+
+			peer.ip, peer.port = parseResponse(response)
+			if peer.ip == nil {
+				log.Println("Error: packet was not UDP")
+			}
+			peer.resolved = true
+
+			fmt.Println(peer.ip.String() + ":" + strconv.FormatUint(uint64(peer.port), 10))
+			setPeer(&peer, ifaceName)
+
+			peers[i] = peer
+		}
+		if keepRequesting {
+			time.Sleep(time.Second * 2)
+		}
+	}
+	fmt.Println("Closing socket...")
+	rawConn.Close()
+}
+
+func testBPF(peers []Peer, client *Peer, server *Server, rawConn *ipv4.RawConn) {
+	payload := make([]byte, 64)
+	copy(payload[0:32], client.pubkey[:])
+
+	response := make([]byte, 4096)
+
+	// goroutine to read replies
 	go func() {
 		for {
 			n, err := rawConn.Read(response)
@@ -132,9 +204,9 @@ func run(ifaceName string, server Server) {
 			if n != 28 && n != 28+6 {
 				srcIP, srcPort, dstPort := parseForBPF(response)
 				fmt.Println("\nInvalid response of", n, "bytes")
-				fmt.Println("SRC IP:", srcIP, "EXPECTED", server.addr.IP)
-				fmt.Println("SRC PORT:", srcPort, "EXPECTED", server.port)
-				fmt.Println("DST PORT:", dstPort, "EXPECTED", client.port)
+				fmt.Println("SRC IP:", srcIP, "\tEXPECTED:", server.addr.IP)
+				fmt.Println("SRC PORT:", srcPort, "\tEXPECTED:", server.port)
+				fmt.Println("DST PORT:", dstPort, "\tEXPECTED:", client.port)
 				fmt.Println()
 				// fmt.Println(hex.Dump(response[:n]))
 			} else {
@@ -142,73 +214,20 @@ func run(ifaceName string, server Server) {
 			}
 		}
 	}()
-	keepRequesting := true
-	for keepRequesting {
-		keepRequesting = false
-		// for i, peer := range peers {
+
+	// send packets on the main goroutine
+	for {
 		for _, peer := range peers {
-			if peer.resolved {
-				continue
-			}
-			// fmt.Print("[+] Requesting peer " + base64.RawStdEncoding.EncodeToString(peer.pubkey[:]) + ": ")
 			copy(payload[32:64], peer.pubkey[:])
 
-			packet := makePacket(payload, &server, &client)
+			packet := makePacket(payload, server, client)
 			_, err := rawConn.WriteToIP(packet, server.addr)
 			if err != nil {
 				log.Println("\nError sending packet:", err)
 				continue
 			}
-
-			// rawConn.SetReadDeadline(time.Now().Add(timeout))
-			// n, err := rawConn.Read(response)
-			// if err != nil {
-			// 	if err, ok := err.(net.Error); ok && err.Timeout() {
-			// 		fmt.Println("\nConnection to", server.hostname, "timed out.")
-			// 		continue
-			// 	}
-			// 	fmt.Println("\nError receiving packet:", err)
-			// 	continue
-			// }
-
-			// For debugging BPF
-			// fmt.Println(hex.Dump(response[:n]))
-			keepRequesting = true
-			continue
-
-			// if n == emptyUDPsize {
-			// 	fmt.Println("not found")
-			// 	keepRequesting = true
-			// 	continue
-			// } else if n < emptyUDPsize {
-			// 	log.Println("\nError: response is not a valid udp packet")
-			// 	continue
-			// } else if n != emptyUDPsize+4+2 {
-			// 	// expected packet size, 4 bytes for ip, 2 for port
-			// 	log.Println("\nError: invalid response of length", n)
-			// 	// For debugging
-			// 	fmt.Println(hex.Dump(response[:n]))
-			// 	keepRequesting = true
-			// 	continue
-			// }
-
-			// peer.ip, peer.port = parseResponse(response)
-			// if peer.ip == nil {
-			// 	log.Println("Error: packet was not UDP")
-			// }
-			// peer.resolved = true
-
-			// fmt.Println(peer.ip.String() + ":" + strconv.FormatUint(uint64(peer.port), 10))
-			// setPeer(&peer, ifaceName)
-
-			// peers[i] = peer
-		}
-		if keepRequesting {
-			time.Sleep(time.Second * 2)
 		}
 	}
-	fmt.Println("Closing socket...")
-	rawConn.Close()
 }
 
 func parseForBPF(response []byte) (srcIP net.IP, srcPort uint16, dstPort uint16) {
