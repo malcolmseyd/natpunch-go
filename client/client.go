@@ -283,14 +283,6 @@ func setupRawConn(server *Server, client *Peer) *ipv4.RawConn {
 }
 
 func applyBPF(rawConn *ipv4.RawConn, server *Server, client *Peer) {
-
-	// WHAT WE KNOW
-	// - Filtering with just one jump works :)
-	//   - This applies to all options (src/dst port, src ip)
-
-	// WHAT WE WILL RESEARCH
-	// Can we chain the options by changing the numbers?
-
 	const ipv4HeaderLen = 20
 
 	const srcIPOffset = 12
