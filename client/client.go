@@ -131,12 +131,14 @@ func run(ifaceName string, server Server) {
 			// fmt.Println(n-28, "bytes read")
 			if n != 28 && n != 28+6 {
 				srcIP, srcPort, dstPort := parseForBPF(response)
-				fmt.Println("Invalid response of", n, "bytes")
+				fmt.Println("\nInvalid response of", n, "bytes")
 				fmt.Println("SRC IP:", srcIP, "EXPECTED", server.addr.IP)
 				fmt.Println("SRC PORT:", srcPort, "EXPECTED", server.port)
 				fmt.Println("DST PORT:", dstPort, "EXPECTED", client.port)
 				fmt.Println()
 				// fmt.Println(hex.Dump(response[:n]))
+			} else {
+				fmt.Print(".")
 			}
 		}
 	}()
@@ -262,6 +264,14 @@ func setupRawConn(server *Server, client *Peer) *ipv4.RawConn {
 }
 
 func applyBPF(rawConn *ipv4.RawConn, server *Server, client *Peer) {
+
+	// WHAT WE KNOW
+	// - Filtering with just one jump works :)
+	//   - This applies to all options (src/dst port, src ip)
+
+	// WHAT WE WILL RESEARCH
+	// Can we chain the options by changing the numbers?
+
 	const ipv4HeaderLen = 20
 
 	const srcIPOffset = 12
@@ -271,21 +281,23 @@ func applyBPF(rawConn *ipv4.RawConn, server *Server, client *Peer) {
 	ipArr := []byte(server.addr.IP.To4())
 	ipInt := uint32(ipArr[0])<<(3*8) + uint32(ipArr[1])<<(2*8) + uint32(ipArr[2])<<8 + uint32(ipArr[3])
 
-	// fmt.Println("IP as an int:", ipInt)
+	fmt.Println("IP as an int:", ipInt)
 
 	// we don't need to filter packet type because the rawconn is ipv4-udp only
+	// Skip values represent the number of instructions to skip if true or false
+	// We can skip to the end if we get a !=, otherwise keep going
 	bpfRaw, err := bpf.Assemble([]bpf.Instruction{
 		bpf.LoadAbsolute{Off: srcIPOffset, Size: 4}, //src ip is server
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: ipInt, SkipFalse: 0, SkipTrue: 5},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: ipInt, SkipFalse: 5, SkipTrue: 0},
 
 		bpf.LoadAbsolute{Off: srcPortOffset, Size: 2}, //src port is server
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(server.port), SkipFalse: 0, SkipTrue: 3},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(server.port), SkipFalse: 3, SkipTrue: 0},
 
 		bpf.LoadAbsolute{Off: dstPortOffset, Size: 2}, //dst port is client
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(client.port), SkipFalse: 0, SkipTrue: 1},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(client.port), SkipFalse: 1, SkipTrue: 0},
 
-		bpf.RetConstant{Val: 0},
 		bpf.RetConstant{Val: 1<<(8*4) - 1}, // max number that fits this value (entire packet)
+		bpf.RetConstant{Val: 0},
 	})
 
 	err = rawConn.SetBPF(bpfRaw)
