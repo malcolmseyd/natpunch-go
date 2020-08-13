@@ -8,7 +8,10 @@ This tools allows you to connect to other Wireguard peers from behind a NAT usin
 
 The client cycles through each peer on the interface until they are all resolved. Requires root to run due to raw socket usage.
 ```
-Usage: ./client SERVER_HOSTNAME:PORT WIREGUARD_INTERFACE
+Usage: ./client [OPTION]... SERVER_HOSTNAME:PORT WIREGUARD_INTERFACE
+Flags:
+  -c, --continuous=false: continuously resolve peers after they've already been resolved
+  -d, --delay=2: time to wait between retries (in seconds)
 Example:
     ./client demo.wireguard.com:12345 wg0
 ```
