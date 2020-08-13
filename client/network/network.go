@@ -55,7 +55,7 @@ func GetClientIP(dstIP net.IP) net.IP {
 func HostToAddr(hostStr string) *net.IPAddr {
 	remoteAddrs, err := net.LookupHost(hostStr)
 	if err != nil {
-		log.Fatalln("Error parsing remote address", err)
+		log.Fatalln("Error parsing remote address:", err)
 	}
 
 	for _, addrStr := range remoteAddrs {
@@ -70,12 +70,12 @@ func HostToAddr(hostStr string) *net.IPAddr {
 func SetupRawConn(server *Server, client *Peer) *ipv4.RawConn {
 	packetConn, err := net.ListenPacket("ip4:udp", client.IP.String())
 	if err != nil {
-		log.Fatalln("Error creating packetConn", err)
+		log.Fatalln("Error creating packetConn:", err)
 	}
 
 	rawConn, err := ipv4.NewRawConn(packetConn)
 	if err != nil {
-		log.Fatalln("Error creating rawConn", err)
+		log.Fatalln("Error creating rawConn:", err)
 	}
 
 	ApplyBPF(rawConn, server, client)
@@ -93,8 +93,6 @@ func ApplyBPF(rawConn *ipv4.RawConn, server *Server, client *Peer) {
 
 	ipArr := []byte(server.Addr.IP.To4())
 	ipInt := uint32(ipArr[0])<<(3*8) + uint32(ipArr[1])<<(2*8) + uint32(ipArr[2])<<8 + uint32(ipArr[3])
-
-	fmt.Println("IP as an int:", ipInt)
 
 	// we don't need to filter packet type because the rawconn is ipv4-udp only
 	// Skip values represent the number of instructions to skip if true or false
@@ -115,7 +113,7 @@ func ApplyBPF(rawConn *ipv4.RawConn, server *Server, client *Peer) {
 
 	err = rawConn.SetBPF(bpfRaw)
 	if err != nil {
-		log.Fatalln("Error setting bpf", err)
+		log.Fatalln("Error setting BPF:", err)
 	}
 }
 

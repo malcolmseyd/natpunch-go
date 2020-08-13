@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ogier/pflag"
+
 	"github.com/malcolmseyd/natpunch-go/client/cmd"
 	"github.com/malcolmseyd/natpunch-go/client/network"
 	"github.com/malcolmseyd/natpunch-go/client/util"
@@ -20,11 +22,22 @@ const timeout = time.Second * 10
 const persistentKeepalive = 25
 
 func main() {
-	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr,
-			"Usage:", os.Args[0], "SERVER_HOSTNAME:PORT WIREGUARD_INTERFACE\n"+
-				"Example:\n"+
-				"   ", os.Args[0], "demo.wireguard.com:12345 wg0")
+	reresolve := pflag.BoolP("reresolve", "r", false, "keep reresolving peers instead of only resolving each once")
+
+	pflag.Parse()
+	args := pflag.Args()
+
+	if len(args) < 2 {
+		fmt.Fprintf(os.Stderr,
+			"Usage: %s [OPTION]... SERVER_HOSTNAME:PORT WIREGUARD_INTERFACE\n"+
+				"Flags:\n", os.Args[0],
+		)
+		pflag.PrintDefaults()
+		fmt.Fprintf(os.Stderr,
+			"Example:\n"+
+				"    %s demo.wireguard.com:12345 wg0\n",
+			os.Args[0],
+		)
 		os.Exit(1)
 	}
 
@@ -33,7 +46,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	serverSplit := strings.Split(os.Args[1], ":")
+	serverSplit := strings.Split(args[0], ":")
 	serverHostname := serverSplit[0]
 	if len(serverSplit) < 2 {
 		fmt.Fprintln(os.Stderr, "Please include a port like this:", serverHostname+":PORT")
@@ -51,12 +64,12 @@ func main() {
 		Addr:     serverAddr,
 		Port:     uint16(serverPort),
 	}
-	ifaceName := os.Args[2]
+	ifaceName := args[1]
 
-	run(ifaceName, server)
+	run(ifaceName, server, *reresolve)
 }
 
-func run(ifaceName string, server network.Server) {
+func run(ifaceName string, server network.Server, reresolve bool) {
 	// get the source ip that we'll send the packet from
 	clientIP := network.GetClientIP(server.Addr.IP)
 
@@ -75,8 +88,10 @@ func run(ifaceName string, server network.Server) {
 	peerKeysStr := cmd.GetPeers(ifaceName)
 	var peers []network.Peer = util.MakePeerSlice(peerKeysStr)
 
-	// we're using raw sockets to spoof the source IP
+	// we're using raw sockets to spoof the source port,
+	// which is already being used by Wireguard
 	rawConn := network.SetupRawConn(&server, &client)
+	defer rawConn.Close()
 
 	// payload consists of client key + peer key
 	payload := make([]byte, 64)
@@ -84,18 +99,21 @@ func run(ifaceName string, server network.Server) {
 
 	response := make([]byte, 4096)
 
-	fmt.Println("Resolving", len(peers), "peers")
+	totalPeers := len(peers)
+	resolvedPeers := 0
+
+	fmt.Println("Resolving", totalPeers, "peers")
 
 	// we keep requesting if the server doesn't have one of our peers.
 	// this keeps running until all connections are established.
 	tryAgain := true
-	for tryAgain {
+	for tryAgain || reresolve {
 		tryAgain = false
 		for i, peer := range peers {
 			if peer.Resolved {
 				continue
 			}
-			fmt.Print("[+] Requesting peer " + base64.RawStdEncoding.EncodeToString(peer.Pubkey[:]) + ": ")
+			fmt.Printf("(%d/%d) %s: ", resolvedPeers, totalPeers, base64.RawStdEncoding.EncodeToString(peer.Pubkey[:])[:16])
 			copy(payload[32:64], peer.Pubkey[:])
 
 			packet := network.MakePacket(payload, &server, &client)
@@ -110,6 +128,7 @@ func run(ifaceName string, server network.Server) {
 			if err != nil {
 				if err, ok := err.(net.Error); ok && err.Timeout() {
 					fmt.Println("\nConnection to", server.Hostname, "timed out.")
+					tryAgain = true
 					continue
 				}
 				fmt.Println("\nError receiving packet:", err)
@@ -134,7 +153,7 @@ func run(ifaceName string, server network.Server) {
 
 			peer.IP, peer.Port = network.ParseResponse(response)
 			if peer.IP == nil {
-				log.Println("Error: packet was not UDP")
+				log.Println("Error parsing packet: not a valid UDP packet")
 			}
 			peer.Resolved = true
 
@@ -142,11 +161,15 @@ func run(ifaceName string, server network.Server) {
 			cmd.SetPeer(&peer, persistentKeepalive, ifaceName)
 
 			peers[i] = peer
+			resolvedPeers++
 		}
 		if tryAgain {
 			time.Sleep(time.Second * 2)
 		}
 	}
-	fmt.Println("Closing socket...")
-	rawConn.Close()
+	fmt.Print("Resolved ", resolvedPeers, " peer")
+	if totalPeers != 1 {
+		fmt.Print("s")
+	}
+	fmt.Print("\n")
 }

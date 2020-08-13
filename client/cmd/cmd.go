@@ -39,7 +39,7 @@ func GetClientPort(iface string) uint16 {
 func GetPeers(iface string) []string {
 	output, err := RunCmd("wg", "show", iface, "peers")
 	if err != nil {
-		log.Fatalln("Error getting peers", err)
+		log.Fatalln("Error getting peers:", err)
 	}
 	return strings.Split(strings.TrimSpace(output), "\n")
 }
@@ -53,7 +53,7 @@ func GetClientPubkey(iface string) network.Pubkey {
 	}
 	keyBytes, err := base64.StdEncoding.DecodeString(strings.TrimSpace(output))
 	if err != nil {
-		log.Fatalln("Error parsing client pubkey")
+		log.Fatalln("Error parsing client pubkey:", err)
 	}
 	copy(keyArr[:], keyBytes)
 	return network.Pubkey(keyArr)

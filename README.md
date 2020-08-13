@@ -8,7 +8,7 @@ This tools allows you to connect to other Wireguard peers from behind a NAT usin
 
 The client cycles through each peer on the interface until they are all resolved. Requires root to run due to raw socket usage.
 ```
-Usage: ./client SERVER WIREGUARD_INTERFACE
+Usage: ./client SERVER_HOSTNAME:PORT WIREGUARD_INTERFACE
 Example:
     ./client demo.wireguard.com:12345 wg0
 ```
