@@ -8,15 +8,13 @@ import (
 	"log"
 	"net"
 	"os"
-	"strconv"
 )
 
-type peerLocation struct {
+// Endpoint is the location of a peer.
+type Endpoint struct {
 	ip   net.IP
 	port uint16
 }
-
-const defaultPort = 12404
 
 func main() {
 	if len(os.Args) < 2 {
@@ -24,11 +22,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println("Starting nat-punching server.")
-	peers := make(map[[32]byte]peerLocation)
+	port := os.Args[1]
+
+	fmt.Println("Starting nat-punching server on port", port)
+	peers := make(map[[32]byte]Endpoint)
 
 	// the client can only handle IPv4 addresses right now.
-	listenAddr, err := net.ResolveUDPAddr("udp4", ":"+strconv.Itoa(defaultPort))
+	listenAddr, err := net.ResolveUDPAddr("udp4", ":"+port)
 	if err != nil {
 		log.Panicln("Error getting UDP address", err)
 	}
@@ -46,7 +46,7 @@ func main() {
 	}
 }
 
-func handleConnection(conn *net.UDPConn, peers map[[32]byte]peerLocation) error {
+func handleConnection(conn *net.UDPConn, peers map[[32]byte]Endpoint) error {
 	var packet [64]byte
 
 	_, clientAddr, err := conn.ReadFromUDP(packet[:])
@@ -60,7 +60,7 @@ func handleConnection(conn *net.UDPConn, peers map[[32]byte]peerLocation) error 
 	var targetPubKey [32]byte
 	copy(targetPubKey[:], packet[32:64])
 
-	clientLocation := peerLocation{
+	clientLocation := Endpoint{
 		ip:   clientAddr.IP,
 		port: uint16(clientAddr.Port),
 	}
@@ -82,20 +82,17 @@ func handleConnection(conn *net.UDPConn, peers map[[32]byte]peerLocation) error 
 		return nil
 	}
 
+	fmt.Print(
+		base64.StdEncoding.EncodeToString(clientPubKey[:])[:16],
+		" ==> ",
+		base64.StdEncoding.EncodeToString(targetPubKey[:])[:16],
+		": ",
+	)
+
 	if exists {
-		fmt.Println(
-			"Connected", base64.StdEncoding.EncodeToString(clientPubKey[:]),
-			"at", clientAddr.String(),
-			"to", base64.StdEncoding.EncodeToString(targetPubKey[:]),
-			"at", targetLocation.ip.String()+":"+strconv.Itoa(int(targetLocation.port)),
-		)
+		fmt.Println("CONNECTED")
 	} else {
-		fmt.Println(
-			base64.StdEncoding.EncodeToString(clientPubKey[:]),
-			"at", clientAddr.String(),
-			"requested", base64.StdEncoding.EncodeToString(targetPubKey[:]),
-			"but it could not be found.",
-		)
+		fmt.Println("NOT FOUND")
 	}
 
 	return nil
