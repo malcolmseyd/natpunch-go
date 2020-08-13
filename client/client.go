@@ -22,22 +22,16 @@ const timeout = time.Second * 10
 const persistentKeepalive = 25
 
 func main() {
-	reresolve := pflag.BoolP("reresolve", "r", false, "keep reresolving peers instead of only resolving each once")
+	pflag.Usage = printUsage
+
+	continuous := pflag.BoolP("continuous", "c", false, "continuously resolve peers after they've already been resolved")
+	delay := pflag.Float32P("delay", "d", 2.0, "time to wait between retries (in seconds)")
 
 	pflag.Parse()
 	args := pflag.Args()
 
 	if len(args) < 2 {
-		fmt.Fprintf(os.Stderr,
-			"Usage: %s [OPTION]... SERVER_HOSTNAME:PORT WIREGUARD_INTERFACE\n"+
-				"Flags:\n", os.Args[0],
-		)
-		pflag.PrintDefaults()
-		fmt.Fprintf(os.Stderr,
-			"Example:\n"+
-				"    %s demo.wireguard.com:12345 wg0\n",
-			os.Args[0],
-		)
+		printUsage()
 		os.Exit(1)
 	}
 
@@ -66,10 +60,10 @@ func main() {
 	}
 	ifaceName := args[1]
 
-	run(ifaceName, server, *reresolve)
+	run(ifaceName, server, *continuous, *delay)
 }
 
-func run(ifaceName string, server network.Server, reresolve bool) {
+func run(ifaceName string, server network.Server, continuous bool, delay float32) {
 	// get the source ip that we'll send the packet from
 	clientIP := network.GetClientIP(server.Addr.IP)
 
@@ -107,10 +101,10 @@ func run(ifaceName string, server network.Server, reresolve bool) {
 	// we keep requesting if the server doesn't have one of our peers.
 	// this keeps running until all connections are established.
 	tryAgain := true
-	for tryAgain || reresolve {
+	for tryAgain {
 		tryAgain = false
 		for i, peer := range peers {
-			if peer.Resolved {
+			if peer.Resolved && !continuous {
 				continue
 			}
 			fmt.Printf("(%d/%d) %s: ", resolvedPeers, totalPeers, base64.RawStdEncoding.EncodeToString(peer.Pubkey[:])[:16])
@@ -155,16 +149,23 @@ func run(ifaceName string, server network.Server, reresolve bool) {
 			if peer.IP == nil {
 				log.Println("Error parsing packet: not a valid UDP packet")
 			}
-			peer.Resolved = true
+			if !peer.Resolved {
+				peer.Resolved = true
+				resolvedPeers++
+			}
 
 			fmt.Println(peer.IP.String() + ":" + strconv.FormatUint(uint64(peer.Port), 10))
 			cmd.SetPeer(&peer, persistentKeepalive, ifaceName)
 
 			peers[i] = peer
-			resolvedPeers++
+
+			if continuous {
+				// always try again if continuous
+				tryAgain = true
+			}
 		}
 		if tryAgain {
-			time.Sleep(time.Second * 2)
+			time.Sleep(time.Second * time.Duration(delay))
 		}
 	}
 	fmt.Print("Resolved ", resolvedPeers, " peer")
@@ -172,4 +173,17 @@ func run(ifaceName string, server network.Server, reresolve bool) {
 		fmt.Print("s")
 	}
 	fmt.Print("\n")
+}
+
+func printUsage() {
+	fmt.Fprintf(os.Stderr,
+		"Usage: %s [OPTION]... SERVER_HOSTNAME:PORT WIREGUARD_INTERFACE\n"+
+			"Flags:\n", os.Args[0],
+	)
+	pflag.PrintDefaults()
+	fmt.Fprintf(os.Stderr,
+		"Example:\n"+
+			"    %s demo.wireguard.com:12345 wg0\n",
+		os.Args[0],
+	)
 }
