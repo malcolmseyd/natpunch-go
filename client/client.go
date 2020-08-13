@@ -17,7 +17,7 @@ import (
 )
 
 const timeout = time.Second * 10
-const persistentKeepalive = "25"
+const persistentKeepalive = 25
 
 func main() {
 	if len(os.Args) < 3 {
@@ -87,11 +87,10 @@ func run(ifaceName string, server network.Server) {
 	fmt.Println("Resolving", len(peers), "peers")
 
 	// we keep requesting if the server doesn't have one of our peers.
-	// this could run in the background until all connections are established.
-
-	keepRequesting := true
-	for keepRequesting {
-		keepRequesting = false
+	// this keeps running until all connections are established.
+	tryAgain := true
+	for tryAgain {
+		tryAgain = false
 		for i, peer := range peers {
 			if peer.Resolved {
 				continue
@@ -117,19 +116,19 @@ func run(ifaceName string, server network.Server) {
 				continue
 			}
 
-			if n == network.EmptyUDPsize {
+			if n == network.EmptyUDPSize {
 				fmt.Println("not found")
-				keepRequesting = true
+				tryAgain = true
 				continue
-			} else if n < network.EmptyUDPsize {
+			} else if n < network.EmptyUDPSize {
 				log.Println("\nError: response is not a valid udp packet")
 				continue
-			} else if n != network.EmptyUDPsize+4+2 {
+			} else if n != network.EmptyUDPSize+4+2 {
 				// expected packet size, 4 bytes for ip, 2 for port
 				log.Println("\nError: invalid response of length", n)
 				// For debugging
 				fmt.Println(hex.Dump(response[:n]))
-				keepRequesting = true
+				tryAgain = true
 				continue
 			}
 
@@ -144,7 +143,7 @@ func run(ifaceName string, server network.Server) {
 
 			peers[i] = peer
 		}
-		if keepRequesting {
+		if tryAgain {
 			time.Sleep(time.Second * 2)
 		}
 	}

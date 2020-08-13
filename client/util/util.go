@@ -7,6 +7,7 @@ import (
 	"github.com/malcolmseyd/natpunch-go/client/network"
 )
 
+// MakePeerSlice constructs a slice of Peers, each with a Pubkey
 func MakePeerSlice(peerKeys []string) []network.Peer {
 	keys := make([]network.Peer, len(peerKeys))
 	for i, key := range peerKeys {
@@ -14,9 +15,10 @@ func MakePeerSlice(peerKeys []string) []network.Peer {
 		if err != nil {
 			log.Fatalln("Error decoding key "+key+":", err)
 		}
+
 		keyArr := [32]byte{}
 		copy(keyArr[:], keyBytes)
-		// all other fields initialize to zero values
+
 		peer := network.Peer{
 			Pubkey:   network.Pubkey(keyArr),
 			Resolved: false,
