@@ -11,15 +11,6 @@ func (s *Session) ConstructHandshakeReq() ([]byte, error) {
 	var err error
 	packet := make([]byte, 0, handshakeReqSize)
 
-	s.ephemPriv, err = genPrivkey()
-	if err != nil {
-		return nil, err
-	}
-	s.ephemPub, err = genPubkey(s.ephemPriv)
-	if err != nil {
-		return nil, err
-	}
-
 	sendIndex := make([]byte, 4)
 	binary.BigEndian.PutUint32(sendIndex, s.sendIndex)
 	packet = append(packet, sendIndex...)
@@ -40,7 +31,7 @@ func (s *Session) ConstructHandshakeReq() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	packet, err = aeadSeal(packet, key, s.sendCounter, s.staticPub, nil)
+	packet, err = aeadSeal(packet, key, 0, s.staticPub, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +45,7 @@ func (s *Session) ConstructHandshakeReq() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	packet, err = aeadSeal(packet, key, s.sendCounter, timestamp, nil)
+	packet, err = aeadSeal(packet, key, 0, timestamp, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -82,32 +73,23 @@ func (s *Session) ParseHandshakeReq(packet []byte) error {
 	var err error
 	curr := packet
 
-	s.ephemPriv, err = genPrivkey()
-	if err != nil {
-		return err
-	}
-	s.ephemPub, err = genPubkey(s.ephemPriv)
-	if err != nil {
-		return err
-	}
-
 	// open staticPub
-	recvIndex := curr[:4]
+	recvIndexBytes := curr[:4]
 	curr = curr[4:]
-	s.recvIndex = binary.BigEndian.Uint32(recvIndex)
+	recvIndex := binary.BigEndian.Uint32(recvIndexBytes)
 
-	s.theirEphemPub = curr[:32]
+	theirEphemPub := curr[:32]
 	curr = curr[32:]
 
-	secret, err := ecdh(s.staticPriv, s.theirEphemPub)
+	secret, err := ecdh(s.staticPriv, theirEphemPub)
 	if err != nil {
 		return err
 	}
-	key, err := deriveKey(secret, recvIndex, 32)
+	key, err := deriveKey(secret, recvIndexBytes, 32)
 	if err != nil {
 		return err
 	}
-	s.theirStaticPub, err = aeadOpen(nil, key, s.recvCounter, curr[:32+emptyAeadSize], nil)
+	theirStaticPub, err := aeadOpen(nil, key, 0, curr[:32+emptyAeadSize], nil)
 	if err != nil {
 		return err
 	}
@@ -132,14 +114,19 @@ func (s *Session) ParseHandshakeReq(packet []byte) error {
 	if err != nil {
 		return err
 	}
-	key, err = deriveKey(secret, recvIndex, 32)
+	key, err = deriveKey(secret, recvIndexBytes, 32)
 	if err != nil {
 		return err
 	}
-	timestamp, err := aeadOpen(nil, key, s.recvCounter, curr[:8+emptyAeadSize], nil)
+	timestamp, err := aeadOpen(nil, key, 0, curr[:8+emptyAeadSize], nil)
 	if err != nil {
 		return err
 	}
+
+	// identity fully verified, we can record values now
+	s.recvIndex = recvIndex
+	s.theirEphemPub = theirEphemPub
+	s.theirStaticPub = theirStaticPub
 	s.created = binary.BigEndian.Uint64(timestamp)
 
 	return nil

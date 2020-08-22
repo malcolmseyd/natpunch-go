@@ -75,24 +75,24 @@ func TestNewSession(t *testing.T) {
 				t.Fail()
 			}
 
-			// if len(sess.ephemPriv) != 32 || len(sess.ephemPub) != 32 {
-			// 	t.Log("Ephemeral keys are incorrect length of", len(sess.ephemPriv), "and", len(sess.ephemPub))
-			// 	t.Fail()
-			// }
+			if len(sess.ephemPriv) != 32 || len(sess.ephemPub) != 32 {
+				t.Log("Ephemeral keys are incorrect length of", len(sess.ephemPriv), "and", len(sess.ephemPub))
+				t.Fail()
+			}
 
-			// ePub, err := genPubkey(sess.ephemPriv)
-			// if err != nil {
-			// 	t.Fatal(err)
-			// }
+			ePub, err := genPubkey(sess.ephemPriv)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-			// if !bytes.Equal(ePub, sess.ephemPub) {
-			// 	t.Log("Ephemeral pubkey not generated the same both times\n" +
-			// 		"Privkey:    " + base64.StdEncoding.EncodeToString(sess.ephemPriv) + "\n" +
-			// 		"Test pub:   " + base64.StdEncoding.EncodeToString(ePub) + "\n" +
-			// 		"NewSession: " + base64.StdEncoding.EncodeToString(sess.ephemPub) + "\n",
-			// 	)
-			// 	t.Fail()
-			// }
+			if !bytes.Equal(ePub, sess.ephemPub) {
+				t.Log("Ephemeral pubkey not generated the same both times\n" +
+					"Privkey:    " + base64.StdEncoding.EncodeToString(sess.ephemPriv) + "\n" +
+					"Test pub:   " + base64.StdEncoding.EncodeToString(ePub) + "\n" +
+					"NewSession: " + base64.StdEncoding.EncodeToString(sess.ephemPub) + "\n",
+				)
+				t.Fail()
+			}
 		})
 	}
 }

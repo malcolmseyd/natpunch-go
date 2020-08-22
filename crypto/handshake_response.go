@@ -23,6 +23,10 @@ func (s *Session) ConstructHandshakeResp() ([]byte, error) {
 	binary.BigEndian.PutUint32(sendIndex, s.sendIndex)
 	packet = append(packet, sendIndex...)
 
+	recvIndex := make([]byte, 4)
+	binary.BigEndian.PutUint32(recvIndex, s.recvIndex)
+	packet = append(packet, recvIndex...)
+
 	packet = append(packet, s.ephemPub...)
 
 	// ephem-ephem secret
@@ -71,9 +75,11 @@ func (s *Session) ParseHandshakeResp(packet []byte) error {
 
 	recvIndex := curr[:4]
 	curr = curr[4:]
-	s.recvIndex = binary.BigEndian.Uint32(recvIndex)
 
-	s.theirEphemPub = curr[:32]
+	// ignore sender index, used to ID the packet
+	curr = curr[4:]
+
+	theirEphemPub := curr[:32]
 	curr = curr[32:]
 
 	tmp, err := hash(append(labelMac, s.staticPub...))
@@ -91,7 +97,7 @@ func (s *Session) ParseHandshakeResp(packet []byte) error {
 
 	// open empty AEAD
 	// ephem-ephem secret
-	secret, err := ecdh(s.ephemPriv, s.theirEphemPub)
+	secret, err := ecdh(s.ephemPriv, theirEphemPub)
 	if err != nil {
 		return err
 	}
@@ -112,6 +118,10 @@ func (s *Session) ParseHandshakeResp(packet []byte) error {
 	if err != nil {
 		return err
 	}
+
+	// identity verified, ok to record values now
+	s.recvIndex = binary.BigEndian.Uint32(recvIndex)
+	s.theirEphemPub = theirEphemPub
 
 	return nil
 }

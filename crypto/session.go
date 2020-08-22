@@ -18,7 +18,7 @@ const (
 
 	// index + ephemPub + encrypted staticPub + encrypted timestamp + MAC
 	handshakeReqSize  = 4 + 32 + (32 + emptyAeadSize) + (8 + emptyAeadSize) + 16
-	handshakeRespSize = 4 + 32 + emptyAeadSize + 16
+	handshakeRespSize = 4 + 4 + 32 + emptyAeadSize + 16
 	dataMinSize       = 4 + 8 + 16
 
 	keysize        = 32
@@ -75,6 +75,15 @@ func NewSession(priv []byte, theirPub []byte) (*Session, error) {
 	s := Session{
 		staticPriv:     priv,
 		theirStaticPub: theirPub,
+	}
+
+	s.ephemPriv, err = genPrivkey()
+	if err != nil {
+		return nil, err
+	}
+	s.ephemPub, err = genPubkey(s.ephemPriv)
+	if err != nil {
+		return nil, err
 	}
 
 	// do the work only once
