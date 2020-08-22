@@ -19,6 +19,7 @@ const (
 	// index + ephemPub + encrypted staticPub + encrypted timestamp + MAC
 	handshakeReqSize  = 4 + 32 + (32 + emptyAeadSize) + (8 + emptyAeadSize) + 16
 	handshakeRespSize = 4 + 32 + emptyAeadSize + 16
+	dataMinSize       = 4 + 8 + 16
 
 	keysize        = 32
 	nonceSize      = 12
@@ -104,4 +105,10 @@ func (s *Session) String() string {
 	str += "index:   " + strconv.FormatUint(uint64(s.sendIndex), 10) + "\n"
 	str += "counter: " + strconv.FormatUint(uint64(s.sendIndex), 10) + "\n"
 	return str
+}
+
+// CountSend increments the send counter. This should be called when a packet is successfully sent.
+// There's no CountRecv because the packet needs to be verified upon decryption before we increment that.
+func (s *Session) CountSend() {
+	s.sendCounter++
 }

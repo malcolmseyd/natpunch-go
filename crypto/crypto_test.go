@@ -209,3 +209,48 @@ func TestParseHandshakeResp(t *testing.T) {
 		t.Fatal("Error parsing handshake response:", err)
 	}
 }
+
+func TestDataExchange(t *testing.T) {
+	peerA := struct {
+		sess *Session
+		pub  []byte
+		priv []byte
+	}{}
+	peerB := struct {
+		sess *Session
+		pub  []byte
+		priv []byte
+	}{}
+
+	message := []byte("Testing, testing.")
+
+	peerA.priv, _ = genPrivkey()
+	peerA.pub, _ = genPubkey(peerA.priv)
+
+	peerB.priv, _ = genPrivkey()
+	peerB.pub, _ = genPubkey(peerB.priv)
+
+	peerA.sess, _ = NewSession(peerA.priv, peerB.pub)
+	peerB.sess, _ = NewSession(peerB.priv, peerA.pub)
+
+	packet, _ := peerA.sess.ConstructHandshakeReq()
+
+	_ = peerB.sess.ParseHandshakeReq(packet)
+
+	packet, _ = peerB.sess.ConstructHandshakeResp()
+
+	_ = peerA.sess.ParseHandshakeResp(packet)
+
+	encrypted, err := peerA.sess.EncryptPacket(message)
+	if err != nil {
+		t.Fatal("Error encrypting packet:", err)
+	}
+
+	decrypted, err := peerB.sess.DecryptPacket(encrypted)
+	if err != nil {
+		t.Fatal("Error decrypting packet", err)
+	}
+	if !bytes.Equal(decrypted, message) {
+		t.Fatal("Decrypted messages are different.")
+	}
+}
