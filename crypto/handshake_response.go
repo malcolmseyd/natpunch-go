@@ -1,7 +1,7 @@
 package crypto
 
 import (
-	"bytes"
+	"crypto/subtle"
 	"encoding/binary"
 )
 
@@ -91,7 +91,7 @@ func (s *Session) ParseHandshakeResp(packet []byte) error {
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(macBytes, packet[macOffset:]) {
+	if subtle.ConstantTimeCompare(macBytes, packet[macOffset:]) == 0 {
 		return ErrDecrypt
 	}
 
