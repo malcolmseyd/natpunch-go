@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -147,6 +148,29 @@ func MakePacket(payload []byte, server *Server, client *Peer) []byte {
 	gopacket.SerializeLayers(buf, opts, &ipHeader, &udpHeader, &payloadLayer)
 
 	return buf.Bytes()
+}
+
+// SendPacket sends packet to the Server
+func SendPacket(packet []byte, conn *ipv4.RawConn, server *Server, client *Peer) error {
+	fullPacket := MakePacket(packet, server, client)
+	_, err := conn.WriteToIP(fullPacket, server.Addr)
+	return err
+}
+
+// RecvPacket recieves a UDP packet from server
+func RecvPacket(conn *ipv4.RawConn, timeout time.Duration, server *Server, client *Peer) ([]byte, int, error) {
+	err := conn.SetReadDeadline(time.Now().Add(timeout))
+	if err != nil {
+		return nil, 0, err
+	}
+	// TODO add length field to packet
+	// this will allow us to use a growable buffer, or to read only when needed
+	response := make([]byte, 4096)
+	n, err := conn.Read(response)
+	if err != nil {
+		return nil, n, err
+	}
+	return response, n, nil
 }
 
 // ParseResponse takes a response packet and parses it into an IP and port.

@@ -91,8 +91,6 @@ func run(ifaceName string, server network.Server, continuous bool, delay float32
 	payload := make([]byte, 64)
 	copy(payload[0:32], clientPubkey[:])
 
-	response := make([]byte, 4096)
-
 	totalPeers := len(peers)
 	resolvedPeers := 0
 
@@ -110,15 +108,13 @@ func run(ifaceName string, server network.Server, continuous bool, delay float32
 			fmt.Printf("(%d/%d) %s: ", resolvedPeers, totalPeers, base64.RawStdEncoding.EncodeToString(peer.Pubkey[:])[:16])
 			copy(payload[32:64], peer.Pubkey[:])
 
-			packet := network.MakePacket(payload, &server, &client)
-			_, err := rawConn.WriteToIP(packet, server.Addr)
+			err := network.SendPacket(payload, rawConn, &server, &client)
 			if err != nil {
 				log.Println("\nError sending packet:", err)
 				continue
 			}
 
-			rawConn.SetReadDeadline(time.Now().Add(timeout))
-			n, err := rawConn.Read(response)
+			response, n, err := network.RecvPacket(rawConn, timeout, &server, &client)
 			if err != nil {
 				if err, ok := err.(net.Error); ok && err.Timeout() {
 					fmt.Println("\nConnection to", server.Hostname, "timed out.")
