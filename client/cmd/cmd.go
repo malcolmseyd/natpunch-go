@@ -44,8 +44,8 @@ func GetPeers(iface string) []string {
 	return strings.Split(strings.TrimSpace(output), "\n")
 }
 
-// GetClientPubkey returns the pubkey on the Wireguard interface
-func GetClientPubkey(iface string) network.Pubkey {
+// GetClientPubkey returns the publib key on the Wireguard interface
+func GetClientPubkey(iface string) network.Key {
 	var keyArr [32]byte
 	output, err := RunCmd("wg", "show", iface, "public-key")
 	if err != nil {
@@ -56,7 +56,22 @@ func GetClientPubkey(iface string) network.Pubkey {
 		log.Fatalln("Error parsing client pubkey:", err)
 	}
 	copy(keyArr[:], keyBytes)
-	return network.Pubkey(keyArr)
+	return network.Key(keyArr)
+}
+
+// GetClientPrivkey returns the private key on the Wireguard interface
+func GetClientPrivkey(iface string) network.Key {
+	var keyArr [32]byte
+	output, err := RunCmd("wg", "show", iface, "private-key")
+	if err != nil {
+		log.Fatalln("Error getting client privkey:", err)
+	}
+	keyBytes, err := base64.StdEncoding.DecodeString(strings.TrimSpace(output))
+	if err != nil {
+		log.Fatalln("Error parsing client privkey:", err)
+	}
+	copy(keyArr[:], keyBytes)
+	return network.Key(keyArr)
 }
 
 // SetPeer updates a peer's endpoint and keepalive with `wg`. keepalive is in seconds
