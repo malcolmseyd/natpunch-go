@@ -189,7 +189,10 @@ func Handshake(conn *ipv4.RawConn, timeout time.Duration, privkey Key, server *S
 
 	header := append([]byte{PacketHandshakeInit}, indexBytes...)
 
-	packet, _, _, err := handshake.WriteMessage(header, nil)
+	timestamp := make([]byte, 8)
+	binary.BigEndian.PutUint64(timestamp, uint64(time.Now().UnixNano()))
+
+	packet, _, _, err := handshake.WriteMessage(header, timestamp)
 	if err != nil {
 		return
 	}

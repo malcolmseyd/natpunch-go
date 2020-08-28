@@ -23,7 +23,7 @@ const (
 	PacketHandshakeInit byte = 1
 	// PacketHandshakeResp identifies handhshake response packets
 	PacketHandshakeResp byte = 2
-	// PacketData identifies regular data packets
+	// PacketData identifies regular data packets.
 	PacketData byte = 3
 )
 
@@ -34,6 +34,10 @@ var (
 	ErrPeerNotFound = errors.New("server: peer not found")
 	// ErrPubkey is returned when the public key recieved does not match the one we expect
 	ErrPubkey = errors.New("server: public key did not match expected one")
+	// ErrOldTimestamp is returned when a handshake timestamp isn't newer than the previous one
+	ErrOldTimestamp = errors.New("server: handshake timestamp isn't new")
+	// ErrNoTimestamp is returned when the handshake packet doesn't contain a timestamp
+	ErrNoTimestamp = errors.New("server: handshake had no timestamp")
 
 	timeout = 5 * time.Second
 
@@ -65,6 +69,8 @@ type Peer struct {
 
 	index      uint32
 	send, recv *auth.CipherState
+	// UnixNano cast to uint64
+	lastHandshake uint64
 }
 
 type state struct {
@@ -240,10 +246,14 @@ func (s *state) handshake(packet []byte, clientAddr *net.UDPAddr, timeout time.D
 	index := binary.BigEndian.Uint32(indexBytes)
 	packet = packet[4:]
 
-	_, _, _, err = handshake.ReadMessage(nil, packet)
+	timestampBytes, _, _, err := handshake.ReadMessage(nil, packet)
 	if err != nil {
 		return
 	}
+	if len(timestampBytes) == 0 {
+		err = ErrNoTimestamp
+	}
+	timestamp := binary.BigEndian.Uint64(timestampBytes)
 
 	var pubkey Key
 	copy(pubkey[:], handshake.PeerStatic())
@@ -253,12 +263,17 @@ func (s *state) handshake(packet []byte, clientAddr *net.UDPAddr, timeout time.D
 			pubkey: pubkey,
 		}
 		s.keyMap[pubkey] = client
-	} else {
-		s.indexMap[index] = nil
 	}
+	if timestamp <= client.lastHandshake {
+		err = ErrOldTimestamp
+		return
+	}
+	client.lastHandshake = timestamp
+	// clear old entry
+	s.indexMap[index] = nil
 	client.ip = clientAddr.IP
 	client.port = uint16(clientAddr.Port)
-	// if index is aleady taken, keep looking
+	// if index is aleady taken, set a new one
 	for {
 		_, ok = s.indexMap[index]
 		if !ok {
@@ -269,7 +284,6 @@ func (s *state) handshake(packet []byte, clientAddr *net.UDPAddr, timeout time.D
 	client.index = index
 	binary.BigEndian.PutUint32(indexBytes, index)
 	s.indexMap[index] = client
-	client.index = index
 
 	header := append([]byte{PacketHandshakeResp}, indexBytes...)
 	// recv and send are opposite order from client code
