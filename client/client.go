@@ -150,9 +150,6 @@ func run(ifaceName string, server network.Server, continuous bool, delay float32
 				fmt.Println("not found")
 				tryAgain = true
 				continue
-			} else if n < network.EmptyUDPSize {
-				log.Println("\nError: response is not a valid udp packet")
-				continue
 			} else if len(body) != 4+2 {
 				// expected packet size, 4 bytes for ip, 2 for port
 				log.Println("\nError: invalid response of length", len(body))
