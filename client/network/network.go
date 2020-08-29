@@ -24,6 +24,8 @@ const (
 	// EmptyUDPSize is the size of an empty UDP packet
 	EmptyUDPSize = 28
 
+	timeout = time.Second * 10
+
 	// PacketHandshakeInit identifies handhshake initiation packets
 	PacketHandshakeInit byte = 1
 	// PacketHandshakeResp identifies handhshake response packets
@@ -35,6 +37,9 @@ const (
 var (
 	// ErrPacketType is returned when an unexepcted packet type is enountered
 	ErrPacketType = errors.New("client/network: incorrect packet type")
+
+	// RekeyDuration is the time after which keys are invalid and a new handshake is required.
+	RekeyDuration = 5 * time.Minute
 )
 
 // EmptyUDPSize is the size of the IPv4 and UDP headers combined.
@@ -48,6 +53,8 @@ type Server struct {
 	Addr     *net.IPAddr
 	Port     uint16
 	Pubkey   Key
+
+	LastHandshake time.Time
 }
 
 // Peer stores data about a peer's key and endpoint, whether it's another peer or the client
@@ -171,7 +178,7 @@ func MakePacket(payload []byte, server *Server, client *Peer) []byte {
 }
 
 // Handshake performs a Noise-IK handshake with the Server
-func Handshake(conn *ipv4.RawConn, timeout time.Duration, privkey Key, server *Server, client *Peer) (sendCipher, recvCipher *auth.CipherState, index uint32, err error) {
+func Handshake(conn *ipv4.RawConn, privkey Key, server *Server, client *Peer) (sendCipher, recvCipher *auth.CipherState, index uint32, err error) {
 	// we generate index on the client side
 	indexBytes := make([]byte, 4)
 	rand.Read(indexBytes)
@@ -201,7 +208,7 @@ func Handshake(conn *ipv4.RawConn, timeout time.Duration, privkey Key, server *S
 		return
 	}
 
-	response, n, err := RecvPacket(conn, timeout, server, client)
+	response, n, err := RecvPacket(conn, server, client)
 	if err != nil {
 		return
 	}
@@ -220,6 +227,8 @@ func Handshake(conn *ipv4.RawConn, timeout time.Duration, privkey Key, server *S
 	// we use our own implementation for manual nonce control
 	sendCipher = auth.NewCipherState(send.Cipher())
 	recvCipher = auth.NewCipherState(recv.Cipher())
+
+	server.LastHandshake = time.Now()
 
 	return
 }
@@ -249,7 +258,7 @@ func SendDataPacket(cipher *auth.CipherState, index uint32, data []byte, conn *i
 }
 
 // RecvPacket recieves a UDP packet from server
-func RecvPacket(conn *ipv4.RawConn, timeout time.Duration, server *Server, client *Peer) ([]byte, int, error) {
+func RecvPacket(conn *ipv4.RawConn, server *Server, client *Peer) ([]byte, int, error) {
 	err := conn.SetReadDeadline(time.Now().Add(timeout))
 	if err != nil {
 		return nil, 0, err
@@ -265,8 +274,8 @@ func RecvPacket(conn *ipv4.RawConn, timeout time.Duration, server *Server, clien
 }
 
 // RecvDataPacket recieves a UDP packet from server
-func RecvDataPacket(cipher *auth.CipherState, conn *ipv4.RawConn, timeout time.Duration, server *Server, client *Peer) (body, header []byte, packetType byte, n int, err error) {
-	response, n, err := RecvPacket(conn, timeout, server, client)
+func RecvDataPacket(cipher *auth.CipherState, conn *ipv4.RawConn, server *Server, client *Peer) (body, header []byte, packetType byte, n int, err error) {
+	response, n, err := RecvPacket(conn, server, client)
 	if err != nil {
 		return
 	}

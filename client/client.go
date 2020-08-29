@@ -18,7 +18,6 @@ import (
 	"github.com/malcolmseyd/natpunch-go/client/util"
 )
 
-const timeout = time.Second * 10
 const persistentKeepalive = 25
 
 func main() {
@@ -108,7 +107,7 @@ func run(ifaceName string, server network.Server, continuous bool, delay float32
 	fmt.Println("Resolving", totalPeers, "peers")
 
 	// Noise handshake
-	sendCipher, recvCipher, index, err := network.Handshake(rawConn, timeout, clientPrivkey, &server, &client)
+	sendCipher, recvCipher, index, err := network.Handshake(rawConn, clientPrivkey, &server, &client)
 	if err != nil {
 		log.Fatalln("Handshake failed:", err)
 	}
@@ -122,6 +121,16 @@ func run(ifaceName string, server network.Server, continuous bool, delay float32
 			if peer.Resolved && !continuous {
 				continue
 			}
+
+			// Rotate keys
+			if time.Since(server.LastHandshake) > network.RekeyDuration {
+				sendCipher, recvCipher, index, err = network.Handshake(rawConn, clientPrivkey, &server, &client)
+				if err != nil {
+					fmt.Fprintln(os.Stderr, "Key rotation failed:", err)
+					tryAgain = true
+					break
+				}
+			}
 			fmt.Printf("(%d/%d) %s: ", resolvedPeers, totalPeers, base64.RawStdEncoding.EncodeToString(peer.Pubkey[:])[:16])
 			copy(payload[32:64], peer.Pubkey[:])
 
@@ -132,7 +141,7 @@ func run(ifaceName string, server network.Server, continuous bool, delay float32
 			}
 
 			// throw away udp header, we have no use for it right now
-			body, _, packetType, n, err := network.RecvDataPacket(recvCipher, rawConn, timeout, &server, &client)
+			body, _, packetType, n, err := network.RecvDataPacket(recvCipher, rawConn, &server, &client)
 			if err != nil {
 				if err, ok := err.(net.Error); ok && err.Timeout() {
 					fmt.Println("\nConnection to", server.Hostname, "timed out.")
