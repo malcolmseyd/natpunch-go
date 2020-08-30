@@ -13,6 +13,7 @@ import (
 
 	"github.com/ogier/pflag"
 
+	"github.com/malcolmseyd/natpunch-go/client/auth"
 	"github.com/malcolmseyd/natpunch-go/client/cmd"
 	"github.com/malcolmseyd/natpunch-go/client/network"
 	"github.com/malcolmseyd/natpunch-go/client/util"
@@ -106,11 +107,9 @@ func run(ifaceName string, server network.Server, continuous bool, delay float32
 
 	fmt.Println("Resolving", totalPeers, "peers")
 
-	// Noise handshake
-	sendCipher, recvCipher, index, err := network.Handshake(rawConn, clientPrivkey, &server, &client)
-	if err != nil {
-		log.Fatalln("Handshake failed:", err)
-	}
+	var sendCipher, recvCipher *auth.CipherState
+	var index uint32
+	var err error
 
 	// we keep requesting if the server doesn't have one of our peers.
 	// this keeps running until all connections are established.
@@ -122,10 +121,15 @@ func run(ifaceName string, server network.Server, continuous bool, delay float32
 				continue
 			}
 
-			// Rotate keys
+			// Noise handshake w/ key rotation
 			if time.Since(server.LastHandshake) > network.RekeyDuration {
 				sendCipher, recvCipher, index, err = network.Handshake(rawConn, clientPrivkey, &server, &client)
 				if err != nil {
+					if err, ok := err.(net.Error); ok && err.Timeout() {
+						fmt.Println("Connection to", server.Hostname, "timed out.")
+						tryAgain = true
+						break
+					}
 					fmt.Fprintln(os.Stderr, "Key rotation failed:", err)
 					tryAgain = true
 					break

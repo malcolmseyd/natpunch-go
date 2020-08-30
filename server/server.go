@@ -124,7 +124,7 @@ func main() {
 	for {
 		err := s.handleConnection()
 		if err != nil {
-			log.Panicln("Error handling the connection", err)
+			fmt.Println("Error handling the connection", err)
 		}
 	}
 }
