@@ -20,7 +20,7 @@ func MakePeerSlice(peerKeys []string) []network.Peer {
 		copy(keyArr[:], keyBytes)
 
 		peer := network.Peer{
-			Pubkey:   network.Pubkey(keyArr),
+			Pubkey:   network.Key(keyArr),
 			Resolved: false,
 		}
 		keys[i] = peer

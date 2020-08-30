@@ -13,12 +13,12 @@ import (
 
 	"github.com/ogier/pflag"
 
+	"github.com/malcolmseyd/natpunch-go/client/auth"
 	"github.com/malcolmseyd/natpunch-go/client/cmd"
 	"github.com/malcolmseyd/natpunch-go/client/network"
 	"github.com/malcolmseyd/natpunch-go/client/util"
 )
 
-const timeout = time.Second * 10
 const persistentKeepalive = 25
 
 func main() {
@@ -30,7 +30,7 @@ func main() {
 	pflag.Parse()
 	args := pflag.Args()
 
-	if len(args) < 2 {
+	if len(args) < 3 {
 		printUsage()
 		os.Exit(1)
 	}
@@ -40,7 +40,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	serverSplit := strings.Split(args[0], ":")
+	ifaceName := args[0]
+
+	serverSplit := strings.Split(args[1], ":")
 	serverHostname := serverSplit[0]
 	if len(serverSplit) < 2 {
 		fmt.Fprintln(os.Stderr, "Please include a port like this:", serverHostname+":PORT")
@@ -53,12 +55,20 @@ func main() {
 	if err != nil {
 		log.Fatalln("Error parsing server port:", err)
 	}
+
+	serverKey, err := base64.StdEncoding.DecodeString(args[2])
+	if err != nil || len(serverKey) != 32 {
+		log.Fatalln("Server key has improper formatting")
+	}
+	var serverKeyArr network.Key
+	copy(serverKeyArr[:], serverKey)
+
 	server := network.Server{
 		Hostname: serverHostname,
 		Addr:     serverAddr,
 		Port:     uint16(serverPort),
+		Pubkey:   serverKeyArr,
 	}
-	ifaceName := args[1]
 
 	run(ifaceName, server, *continuous, *delay)
 }
@@ -72,6 +82,7 @@ func run(ifaceName string, server network.Server, continuous bool, delay float32
 	// get info about the Wireguard config
 	clientPort := cmd.GetClientPort(ifaceName)
 	clientPubkey := cmd.GetClientPubkey(ifaceName)
+	clientPrivkey := cmd.GetClientPrivkey(ifaceName)
 
 	client := network.Peer{
 		IP:     clientIP,
@@ -96,6 +107,10 @@ func run(ifaceName string, server network.Server, continuous bool, delay float32
 
 	fmt.Println("Resolving", totalPeers, "peers")
 
+	var sendCipher, recvCipher *auth.CipherState
+	var index uint32
+	var err error
+
 	// we keep requesting if the server doesn't have one of our peers.
 	// this keeps running until all connections are established.
 	tryAgain := true
@@ -105,16 +120,32 @@ func run(ifaceName string, server network.Server, continuous bool, delay float32
 			if peer.Resolved && !continuous {
 				continue
 			}
+
+			// Noise handshake w/ key rotation
+			if time.Since(server.LastHandshake) > network.RekeyDuration {
+				sendCipher, recvCipher, index, err = network.Handshake(rawConn, clientPrivkey, &server, &client)
+				if err != nil {
+					if err, ok := err.(net.Error); ok && err.Timeout() {
+						fmt.Println("Connection to", server.Hostname, "timed out.")
+						tryAgain = true
+						break
+					}
+					fmt.Fprintln(os.Stderr, "Key rotation failed:", err)
+					tryAgain = true
+					break
+				}
+			}
 			fmt.Printf("(%d/%d) %s: ", resolvedPeers, totalPeers, base64.RawStdEncoding.EncodeToString(peer.Pubkey[:])[:16])
 			copy(payload[32:64], peer.Pubkey[:])
 
-			err := network.SendPacket(payload, rawConn, &server, &client)
+			err := network.SendDataPacket(sendCipher, index, payload, rawConn, &server, &client)
 			if err != nil {
 				log.Println("\nError sending packet:", err)
 				continue
 			}
 
-			response, n, err := network.RecvPacket(rawConn, timeout, &server, &client)
+			// throw away udp header, we have no use for it right now
+			body, _, packetType, n, err := network.RecvDataPacket(recvCipher, rawConn, &server, &client)
 			if err != nil {
 				if err, ok := err.(net.Error); ok && err.Timeout() {
 					fmt.Println("\nConnection to", server.Hostname, "timed out.")
@@ -124,24 +155,24 @@ func run(ifaceName string, server network.Server, continuous bool, delay float32
 				fmt.Println("\nError receiving packet:", err)
 				continue
 			}
+			if packetType != network.PacketData {
+				fmt.Println("\nExpected data packet, got", packetType)
+			}
 
-			if n == network.EmptyUDPSize {
+			if len(body) == 0 {
 				fmt.Println("not found")
 				tryAgain = true
 				continue
-			} else if n < network.EmptyUDPSize {
-				log.Println("\nError: response is not a valid udp packet")
-				continue
-			} else if n != network.EmptyUDPSize+4+2 {
+			} else if len(body) != 4+2 {
 				// expected packet size, 4 bytes for ip, 2 for port
-				log.Println("\nError: invalid response of length", n)
+				log.Println("\nError: invalid response of length", len(body))
 				// For debugging
-				fmt.Println(hex.Dump(response[:n]))
+				fmt.Println(hex.Dump(body[:n]))
 				tryAgain = true
 				continue
 			}
 
-			peer.IP, peer.Port = network.ParseResponse(response)
+			peer.IP, peer.Port = network.ParseResponse(body)
 			if peer.IP == nil {
 				log.Println("Error parsing packet: not a valid UDP packet")
 			}
@@ -173,13 +204,13 @@ func run(ifaceName string, server network.Server, continuous bool, delay float32
 
 func printUsage() {
 	fmt.Fprintf(os.Stderr,
-		"Usage: %s [OPTION]... SERVER_HOSTNAME:PORT WIREGUARD_INTERFACE\n"+
+		"Usage: %s [OPTION]... WIREGUARD_INTERFACE SERVER_HOSTNAME:PORT SERVER_PUBKEY\n"+
 			"Flags:\n", os.Args[0],
 	)
 	pflag.PrintDefaults()
 	fmt.Fprintf(os.Stderr,
 		"Example:\n"+
-			"    %s demo.wireguard.com:12345 wg0\n",
+			"    %s wg0 demo.wireguard.com:12345 1rwvlEQkF6vL4jA1gRzlTM7I3tuZHtdq8qkLMwBs8Uw=\n",
 		os.Args[0],
 	)
 }

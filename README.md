@@ -8,17 +8,17 @@ This tools allows you to connect to other Wireguard peers from behind a NAT usin
 
 The client cycles through each peer on the interface until they are all resolved. Requires root to run due to raw socket usage.
 ```
-Usage: ./client [OPTION]... SERVER_HOSTNAME:PORT WIREGUARD_INTERFACE
+Usage: ./client [OPTION]... WIREGUARD_INTERFACE SERVER_HOSTNAME:PORT SERVER_PUBKEY
 Flags:
   -c, --continuous=false: continuously resolve peers after they've already been resolved
   -d, --delay=2: time to wait between retries (in seconds)
 Example:
-    ./client demo.wireguard.com:12345 wg0
+    ./client wg0 demo.wireguard.com:12345 1rwvlEQkF6vL4jA1gRzlTM7I3tuZHtdq8qkLMwBs8Uw=
 ```
 
 The server associates each pubkey to an ip and a port. Doesn't require root to run.
 ```
-Usage: ./server PORT
+Usage: ./server PORT [PRIVATE_KEY]
 ```
 
 ## Why
