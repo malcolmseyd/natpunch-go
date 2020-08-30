@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 
 	"github.com/flynn/noise"
+	"github.com/malcolmseyd/natpunch-go/antireplay"
 	"golang.org/x/crypto/curve25519"
 )
 
@@ -20,6 +21,7 @@ var noiseConfig = noise.Config{
 type CipherState struct {
 	c noise.Cipher
 	n uint64
+	w antireplay.Window
 }
 
 // NewCipherState initializes a new CipherState
@@ -49,6 +51,12 @@ func (s *CipherState) Nonce() uint64 {
 // SetNonce sets the nonce value inside CipherState
 func (s *CipherState) SetNonce(n uint64) {
 	s.n = n
+}
+
+// CheckNonce returns true if the nonce is valid, and false if the nonce is
+// reused or outside of the sliding window
+func (s *CipherState) CheckNonce(n uint64) bool {
+	return s.w.Check(n)
 }
 
 // NewConfig initializes a new noise.Config with the provided data

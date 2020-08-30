@@ -37,6 +37,8 @@ const (
 var (
 	// ErrPacketType is returned when an unexepcted packet type is enountered
 	ErrPacketType = errors.New("client/network: incorrect packet type")
+	// ErrNonce is returned when the nonce on a packet isn't valid
+	ErrNonce = errors.New("client/network: invalid nonce")
 
 	// RekeyDuration is the time after which keys are invalid and a new handshake is required.
 	RekeyDuration = 5 * time.Minute
@@ -286,17 +288,24 @@ func RecvDataPacket(cipher *auth.CipherState, conn *ipv4.RawConn, server *Server
 	packetType = response[0]
 	response = response[1:]
 
-	// TODO sliding window for nonce
-	// this is vulnerable to nonce reuse and replay attacks.
-	// due to UDP reordering we cannot use a conventional implementation
-	// and will have to rely on a sliding window of sorts. since we can
-	// predict the number of response packets that shouldn't be too hard
 	nonce := binary.BigEndian.Uint64(response[:8])
 	response = response[8:]
 	cipher.SetNonce(nonce)
 	// println("recving nonce:", nonce)
 
 	body, err = cipher.Decrypt(nil, nil, response)
+	if err != nil {
+		return
+	}
+
+	// now that we're authenticated, see if the nonce is valid
+	// the sliding window contains a generous 1000 packets, that should hold up
+	// with plenty of peers.
+	if !cipher.CheckNonce(nonce) {
+		err = ErrNonce
+		body = nil
+	}
+
 	return
 }
 

@@ -38,6 +38,8 @@ var (
 	ErrOldTimestamp = errors.New("server: handshake timestamp isn't new")
 	// ErrNoTimestamp is returned when the handshake packet doesn't contain a timestamp
 	ErrNoTimestamp = errors.New("server: handshake had no timestamp")
+	// ErrNonce is returned when the nonce on a packet isn't valid
+	ErrNonce = errors.New("client/network: invalid nonce")
 
 	timeout = 5 * time.Second
 
@@ -164,11 +166,13 @@ func (s *state) dataPacket(packet []byte, clientAddr *net.UDPAddr, timeout time.
 	packet = packet[8:]
 	// println("recving nonce", nonce)
 
-	// vulnerable to replay attacks
-	// TODO server nonce sliding window
 	client.recv.SetNonce(nonce)
 	plaintext, err := client.recv.Decrypt(nil, nil, packet)
 	if err != nil {
+		return
+	}
+	if !client.recv.CheckNonce(nonce) {
+		// no need to throw an error, just return
 		return
 	}
 
