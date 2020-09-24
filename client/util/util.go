@@ -2,18 +2,24 @@ package util
 
 import (
 	"encoding/base64"
-	"log"
+	"errors"
+	"fmt"
+	"os"
 
 	"github.com/malcolmseyd/natpunch-go/client/network"
 )
 
+var (
+	ErrKeyBase64 = errors.New("client/util: error decoding key from base64 string")
+)
+
 // MakePeerSlice constructs a slice of Peers, each with a Pubkey
-func MakePeerSlice(peerKeys []string) []network.Peer {
+func MakePeerSlice(peerKeys []string) ([]network.Peer, error) {
 	keys := make([]network.Peer, len(peerKeys))
 	for i, key := range peerKeys {
 		keyBytes, err := base64.StdEncoding.DecodeString(key)
 		if err != nil {
-			log.Fatalln("Error decoding key "+key+":", err)
+			return nil, ErrKeyBase64
 		}
 
 		keyArr := [32]byte{}
@@ -25,5 +31,20 @@ func MakePeerSlice(peerKeys []string) []network.Peer {
 		}
 		keys[i] = peer
 	}
-	return keys
+	return keys, nil
+}
+
+// Eprintln is fmt.Println to stderr
+func Eprintln(args ...interface{}) {
+	fmt.Fprintln(os.Stderr, args...)
+}
+
+// Eprint is fmt.Print to stderr
+func Eprint(args ...interface{}) {
+	fmt.Fprint(os.Stderr, args...)
+}
+
+// Eprintf is fmt.Print to stderr
+func Eprintf(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, format, args...)
 }
