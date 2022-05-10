@@ -3,10 +3,10 @@ module github.com/malcolmseyd/natpunch-go
 go 1.15
 
 require (
-	github.com/flynn/noise v0.0.0-20180327030543-2492fe189ae6
+	github.com/flynn/noise v1.0.0
 	github.com/google/gopacket v1.1.18
 	github.com/ogier/pflag v0.0.1
 	github.com/vishvananda/netlink v1.1.0
-	golang.org/x/crypto v0.0.0-20200820211705-5c72a883971a
-	golang.org/x/net v0.0.0-20200822124328-c89045814202
+	golang.org/x/crypto v0.0.0-20210322153248-0c34fe9e7dc2
+	golang.org/x/net v0.0.0-20210226172049-e18ecbb05110
 )
