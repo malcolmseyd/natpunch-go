@@ -2,7 +2,7 @@
 
 This is a [NAT hole punching](https://en.wikipedia.org/wiki/UDP_hole_punching) tool designed for creating Wireguard mesh networks. It was inspired by [Tailscale](https://www.tailscale.com/) and informed by [this example](https://git.zx2c4.com/wireguard-tools/tree/contrib/nat-hole-punching/).
 
-This tools allows you to connect to other Wireguard peers from behind a NAT using a server for ip and port discovery. I'd recommend putting this tool behind a Wireguard connection with the server as there's no authentication yet. Also, the client is Linux only.
+This tools allows you to connect to other Wireguard peers from behind a NAT using a server for ip and port discovery. The client is Linux only.
 
 ## Usage
 
